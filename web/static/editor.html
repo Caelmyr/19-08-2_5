@@ -116,11 +116,13 @@
   }
   
   .sidebar {
-    width: 240px;
+    width: 264px;
     background: white;
     border-left: 1px solid #e8ecf1;
     padding: 16px;
-    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
   .sidebar h3 {
     font-size: 14px;
@@ -134,6 +136,90 @@
     color: #999;
     line-height: 1.6;
     margin-bottom: 8px;
+  }
+
+  /* ========== 大纲（自动目录） ========== */
+  .outline-section {
+    flex: 1 1 auto;
+    min-height: 120px;
+    display: flex;
+    flex-direction: column;
+  }
+  .outline-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .outline-header h3 { margin-bottom: 0; }
+  .outline-actions { display: flex; gap: 4px; }
+  .outline-actions button {
+    width: 20px;
+    height: 20px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: #999;
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .outline-actions button:hover { background: #eef1f7; color: #4361ee; }
+  .outline-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    margin: 0 -6px;
+    padding: 0 6px;
+  }
+  .outline-empty {
+    font-size: 12px;
+    color: #999;
+    line-height: 1.7;
+    padding: 4px 2px;
+  }
+  .outline-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 6px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    color: #555;
+    white-space: nowrap;
+    border-left: 2px solid transparent;
+  }
+  .outline-item:hover { background: #f0f2f8; }
+  .outline-item.active {
+    background: #e8edff;
+    color: #4361ee;
+    font-weight: 600;
+    border-left-color: #4361ee;
+  }
+  .outline-item.level-1 .outline-title { font-weight: 600; color: #1a1a2e; }
+  .outline-item.level-1.active .outline-title { color: #4361ee; }
+  .outline-arrow {
+    flex: none;
+    width: 14px;
+    font-size: 8px;
+    color: #aaa;
+    text-align: center;
+    user-select: none;
+    transition: transform 0.15s;
+  }
+  .outline-arrow.is-collapsed { transform: rotate(-90deg); }
+  .outline-arrow.is-leaf { color: transparent; font-size: 6px; }
+  .outline-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .sidebar-users {
+    flex: none;
+    max-height: 45%;
+    overflow-y: auto;
+    padding-top: 16px;
+    border-top: 1px solid #f0f2f5;
   }
   
   .footer-bar {
@@ -171,13 +257,26 @@
   <div class="cursors-layer" id="cursorsLayer"></div>
   <textarea id="editor" spellcheck="false" placeholder="开始输入..."></textarea>
   <div class="sidebar">
-    <h3>在线用户</h3>
-    <div class="users-panel" id="usersPanel"></div>
-    <h3 style="margin-top:24px;">协作提示</h3>
-    <p>👋 多人可以同时编辑此文档</p>
-    <p>🎨 不同颜色代表不同用户的光标位置</p>
-    <p>💾 所有更改自动保存到服务器</p>
-    <p>🔄 支持版本历史和回滚</p>
+    <div class="outline-section">
+      <div class="outline-header">
+        <h3>大纲</h3>
+        <div class="outline-actions">
+          <button id="outlineExpandAll" title="全部展开">⌄</button>
+          <button id="outlineCollapseAll" title="全部折叠">›</button>
+        </div>
+      </div>
+      <div class="outline-list" id="outlineList"></div>
+    </div>
+    <div class="sidebar-users">
+      <h3>在线用户</h3>
+      <div class="users-panel" id="usersPanel"></div>
+      <h3 style="margin-top:16px;">协作提示</h3>
+      <p>👋 多人可以同时编辑此文档</p>
+      <p>🎨 不同颜色代表不同用户的光标位置</p>
+      <p>💾 所有更改自动保存到服务器</p>
+      <p>🔄 支持版本历史和回滚</p>
+      <p># 用 # 标记标题，大纲会自动更新</p>
+    </div>
   </div>
 </div>
 
@@ -216,6 +315,7 @@ const statusText = document.getElementById('statusText');
 const usersPanel = document.getElementById('usersPanel');
 const userCount = document.getElementById('userCount');
 const docTitle = document.getElementById('docTitle');
+const outlineList = document.getElementById('outlineList');
 
 // ========== 初始化 ==========
 async function init() {
@@ -228,7 +328,13 @@ async function init() {
   editor.addEventListener('keyup', onCursorMove);
   editor.addEventListener('mouseup', onCursorMove);
   editor.addEventListener('scroll', renderCursors);
+  editor.addEventListener('scroll', updateActiveHeadingFromScroll);
   window.addEventListener('resize', renderCursors);
+  window.addEventListener('resize', () => { invalidateHeadingTops(); updateActiveHeadingFromScroll(); });
+
+  // 大纲：全部展开 / 全部折叠
+  document.getElementById('outlineExpandAll').addEventListener('click', expandAllOutline);
+  document.getElementById('outlineCollapseAll').addEventListener('click', collapseAllOutline);
 }
 
 async function loadDocument() {
@@ -244,6 +350,8 @@ async function loadDocument() {
     const docRes = await fetch(`/api/documents/${docId}`);
     const docData = await docRes.json();
     docTitle.textContent = docData.title || '未命名文档';
+
+    refreshOutline();
   } catch (e) {
     console.error('加载文档失败:', e);
   }
@@ -323,6 +431,7 @@ function handleInit(msg) {
   if (msg.content !== undefined) {
     state.content = msg.content;
     editor.value = msg.content;
+    refreshOutline();
   }
   if (msg.version !== undefined) {
     state.version = msg.version;
@@ -441,12 +550,11 @@ function renderCursors() {
   });
 }
 
-// 获取光标在textarea中的像素位置
-function getCaretCoordinates(element, position) {
-  // 创建一个镜像元素来计算位置
+// 创建与 textarea 排版一致的镜像元素（用于计算字符像素位置）
+function createMirrorElement() {
   const mirror = document.createElement('div');
-  const style = window.getComputedStyle(element);
-  
+  const style = window.getComputedStyle(editor);
+
   // 复制样式
   const props = ['boxSizing', 'width', 'height', 'overflowX', 'overflowY',
     'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
@@ -455,18 +563,26 @@ function getCaretCoordinates(element, position) {
     'fontSizeAdjust', 'lineHeight', 'fontFamily',
     'textAlign', 'textTransform', 'textIndent', 'textDecoration',
     'letterSpacing', 'wordSpacing', 'tabSize'];
-  
+
   props.forEach(p => {
     mirror.style[p] = style[p];
   });
-  
+
   mirror.style.position = 'absolute';
   mirror.style.top = '0';
   mirror.style.left = '0';
   mirror.style.visibility = 'hidden';
   mirror.style.whiteSpace = 'pre-wrap';
   mirror.style.wordWrap = 'break-word';
-  
+  mirror.style.overflowWrap = 'break-word';
+
+  return mirror;
+}
+
+// 获取光标在textarea中的像素位置
+function getCaretCoordinates(element, position) {
+  const mirror = createMirrorElement();
+  const style = window.getComputedStyle(element);
   // 设置内容
   const text = element.value.substring(0, position);
   const afterText = element.value.substring(position);
@@ -506,6 +622,8 @@ function onInput(e) {
   // 发送操作（带base_version）
   sendOp(op, state.version);
   state.content = newContent;
+  // 标题增删或层级变化立刻反映到大纲
+  refreshOutline();
 }
 
 function onCursorMove() {
@@ -596,8 +714,10 @@ function applyOpToEditor(op) {
       deleteText(o.position, o.length);
     }
   });
-  
+
   state.content = editor.value;
+  // 远端标题变更实时反映到本地大纲（多人协作同步）
+  refreshOutline();
 }
 
 function insertText(pos, text) {
@@ -649,6 +769,337 @@ function escapeHtml(s) {
   const div = document.createElement('div');
   div.textContent = s;
   return div.innerHTML;
+}
+
+// ========== 大纲（自动目录） ==========
+// 约定：Markdown ATX 标题语法，行首 1~6 个 # + 空格，如 "## 背景"
+const outlineState = {
+  headings: [],          // {id, level, text, offset}，按正文顺序
+  collapsed: new Set(),  // 被折叠的标题 id
+  activeId: null,        // 当前所在章节
+  headingTops: null,     // 缓存：每个标题相对正文内容区的 y 坐标
+  headingTopsFor: null,  // 缓存对应的正文内容
+  ticking: false,
+};
+
+let outlineSeq = 0;
+
+// 解析正文，提取标题及其在字符串中的偏移量
+function parseHeadings(content) {
+  const headings = [];
+  const fenceRe = /^\s*(```+|~~~+)/;
+  const lines = content.split('\n');
+  let offset = 0;
+  let inFence = false;
+  let fenceMarker = null;
+
+  for (const line of lines) {
+    const fenceMatch = line.match(fenceRe);
+    if (fenceMatch) {
+      const marker = fenceMatch[1][0];
+      const len = fenceMatch[1].length;
+      if (!inFence) {
+        inFence = true;
+        fenceMarker = { marker, len };
+      } else if (marker === fenceMarker.marker && len >= fenceMarker.len) {
+        inFence = false;
+        fenceMarker = null;
+      }
+    } else if (!inFence) {
+      // 标记：行首最多 3 空格 + 1~6 个 #，# 后必须是空白或行尾（"##文字" 不算标题）
+      const mk = line.match(/^ {0,3}(#{1,6})(?:[ \t]+(.*?))?$/);
+      if (mk) {
+        // 去掉结尾的闭合井号序列（如 "标题 ###"）
+        const text = (mk[2] || '').replace(/[ \t]+#+[ \t]*$/, '').trim();
+        if (text.length > 0) {
+          headings.push({
+            id: null,
+            level: mk[1].length,
+            text,
+            offset,
+          });
+        }
+      }
+    }
+    offset += line.length + 1;
+  }
+  return headings;
+}
+
+// 重新解析并按顺序匹配旧 id：未改动的标题（层级+文本一致）保持稳定身份，
+// 因此折叠状态、当前高亮在增删/改层级后仍尽量保留
+function reconcileHeadings() {
+  const next = parseHeadings(editor.value);
+  const old = outlineState.headings;
+  let oi = 0;
+  for (const h of next) {
+    for (let i = oi; i < old.length; i++) {
+      if (old[i].level === h.level && old[i].text === h.text) {
+        h.id = old[i].id;
+        oi = i + 1;
+        break;
+      }
+    }
+    if (h.id === null) h.id = 'h-' + (++outlineSeq);
+  }
+  outlineState.headings = next;
+  invalidateHeadingTops();
+}
+
+// 构建层级森林（跳过的层级自动挂到最近的更高级节点）
+function buildOutlineForest() {
+  const roots = [];
+  const stack = []; // {level, node}
+  for (const h of outlineState.headings) {
+    const node = { ...h, children: [] };
+    while (stack.length && stack[stack.length - 1].level >= h.level) stack.pop();
+    if (stack.length) stack[stack.length - 1].node.children.push(node);
+    else roots.push(node);
+    stack.push({ level: h.level, node });
+  }
+  return roots;
+}
+
+// 标题是否被某个已折叠的祖先隐藏
+function isHidden(index) {
+  const heading = outlineState.headings[index];
+  for (let i = 0; i < index; i++) {
+    const anc = outlineState.headings[i];
+    if (anc.level < heading.level && outlineState.collapsed.has(anc.id)) return true;
+  }
+  return false;
+}
+
+function getAncestorIds(index) {
+  const heading = outlineState.headings[index];
+  const ids = [];
+  for (let i = 0; i < index; i++) {
+    if (outlineState.headings[i].level < heading.level) ids.push(outlineState.headings[i].id);
+  }
+  return ids;
+}
+
+// 编辑后/远端同步后刷新大纲
+function refreshOutline() {
+  const prevActive = outlineState.activeId;
+  reconcileHeadings();
+  const exists = outlineState.headings.some(h => h.id === prevActive);
+  renderOutline(exists ? prevActive : null);
+}
+
+function renderOutline(preferActiveId) {
+  const forest = buildOutlineForest();
+
+  if (outlineState.headings.length === 0) {
+    outlineList.innerHTML =
+      '<div class="outline-empty">暂无标题<br>在行首输入 <code># </code> 加空格创建标题，支持 1~6 级</div>';
+    outlineState.activeId = null;
+    return;
+  }
+
+  // 计算可见的扁平条目
+  const rows = [];
+  const idIndex = new Map(outlineState.headings.map((h, i) => [h.id, i]));
+  const walk = (nodes, depth) => {
+    for (const node of nodes) {
+      rows.push({ node, depth });
+      const collapsed = outlineState.collapsed.has(node.id);
+      if (!collapsed) walk(node.children, depth + 1);
+    }
+  };
+  walk(forest, 0);
+
+  // 确定高亮项
+  let activeId = outlineState.activeId;
+  if (activeId === null || !idIndex.has(activeId) || isHidden(idIndex.get(activeId))) {
+    activeId = preferActiveId && idIndex.has(preferActiveId) ? preferActiveId : null;
+    if (activeId === null) {
+      // 退而求其次：正文光标上方最近的标题
+      const caret = editor.selectionStart || 0;
+      for (let i = outlineState.headings.length - 1; i >= 0; i--) {
+        if (outlineState.headings[i].offset <= caret && !isHidden(i)) {
+          activeId = outlineState.headings[i].id;
+          break;
+        }
+      }
+    }
+  }
+  outlineState.activeId = activeId;
+
+  outlineList.innerHTML = '';
+  for (const { node, depth } of rows) {
+    outlineList.appendChild(createOutlineRow(node, depth, node.id === activeId));
+  }
+
+  if (activeId) scrollActiveOutlineIntoView();
+}
+
+function createOutlineRow(node, depth, active) {
+  const item = document.createElement('div');
+  item.className = `outline-item level-${node.level}${active ? ' active' : ''}`;
+  item.dataset.id = node.id;
+  item.style.paddingLeft = (6 + depth * 12) + 'px';
+  item.title = node.text;
+
+  const arrow = document.createElement('span');
+  const hasChildren = node.children.length > 0;
+  arrow.className = 'outline-arrow' +
+    (hasChildren ? (outlineState.collapsed.has(node.id) ? ' is-collapsed' : '') : ' is-leaf');
+  arrow.textContent = '▼';
+  arrow.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!hasChildren) return;
+    toggleCollapse(node.id);
+  });
+
+  const title = document.createElement('span');
+  title.className = 'outline-title';
+  title.textContent = node.text;
+
+  item.appendChild(arrow);
+  item.appendChild(title);
+  item.addEventListener('click', () => jumpToHeading(node.id));
+  return item;
+}
+
+function toggleCollapse(id) {
+  if (outlineState.collapsed.has(id)) outlineState.collapsed.delete(id);
+  else outlineState.collapsed.add(id);
+  renderOutline(outlineState.activeId);
+}
+
+function expandAllOutline() {
+  outlineState.collapsed.clear();
+  renderOutline(outlineState.activeId);
+}
+
+function collapseAllOutline() {
+  // 只折叠有子标题的节点；折叠后自动展开高亮项的祖先
+  outlineState.collapsed.clear();
+  outlineState.headings.forEach((h, i) => {
+    if (outlineState.headings.some((o, j) => j > i && o.level > h.level)) {
+      outlineState.collapsed.add(h.id);
+    }
+  });
+  renderOutline(null);
+  const active = findActiveHeadingId();
+  if (active) setActiveHeading(active, { expandAncestors: true });
+}
+
+function setActiveHeading(id, { expandAncestors, scrollIntoView } = { expandAncestors: true, scrollIntoView: true }) {
+  if (id === outlineState.activeId) return;
+  outlineState.activeId = id;
+  if (id === null) return;
+
+  if (expandAncestors) {
+    const idx = outlineState.headings.findIndex(h => h.id === id);
+    if (idx >= 0) {
+      let changed = false;
+      for (const aid of getAncestorIds(idx)) {
+        if (outlineState.collapsed.has(aid)) {
+          outlineState.collapsed.delete(aid);
+          changed = true;
+        }
+      }
+      if (changed) {
+        renderOutline(id);
+        return;
+      }
+    }
+  }
+
+  outlineList.querySelectorAll('.outline-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.id === id);
+  });
+  if (scrollIntoView) scrollActiveOutlineIntoView();
+}
+
+function scrollActiveOutlineIntoView() {
+  const el = outlineList.querySelector('.outline-item.active');
+  if (el) el.scrollIntoView({ block: 'nearest' });
+}
+
+// ========== 大纲 ↔ 正文位置对齐 ==========
+function invalidateHeadingTops() {
+  outlineState.headingTops = null;
+  outlineState.headingTopsFor = null;
+}
+
+// 一次镜像排版，批量测出所有标题相对正文内容区顶部的 y 坐标
+function measureHeadingTops() {
+  const content = editor.value;
+  if (outlineState.headingTops && outlineState.headingTopsFor === content) {
+    return outlineState.headingTops;
+  }
+
+  const mirror = createMirrorElement();
+  const positions = outlineState.headings.map(h => h.offset);
+
+  let html = '';
+  let cursor = 0;
+  positions.forEach((pos, k) => {
+    html += escapeHtml(content.substring(cursor, pos));
+    html += `<span data-h="${k}" style="display:inline">`;
+    html += escapeHtml(content.charAt(pos) || '​');
+    html += '</span>';
+    cursor = pos + 1;
+  });
+  html += escapeHtml(content.substring(cursor));
+  mirror.innerHTML = html;
+  document.body.appendChild(mirror);
+
+  const mirrorRect = mirror.getBoundingClientRect();
+  const tops = {};
+  mirror.querySelectorAll('span[data-h]').forEach(span => {
+    const heading = outlineState.headings[Number(span.dataset.h)];
+    tops[heading.id] = span.getBoundingClientRect().top - mirrorRect.top;
+  });
+  document.body.removeChild(mirror);
+
+  outlineState.headingTops = tops;
+  outlineState.headingTopsFor = content;
+  return tops;
+}
+
+// 点击大纲条目：滚动正文并放置光标到标题行首
+function jumpToHeading(id) {
+  const heading = outlineState.headings.find(h => h.id === id);
+  if (!heading) return;
+
+  const tops = measureHeadingTops();
+  const y = tops[id] || 0;
+  editor.focus();
+  editor.scrollTop = Math.max(0, y - 8);
+  const pos = Math.min(heading.offset, editor.value.length);
+  editor.setSelectionRange(pos, pos);
+  state.cursorPosition = pos;
+  sendCursorPosition(pos);
+  renderCursors();
+  setActiveHeading(id, { expandAncestors: false });
+}
+
+// 根据当前滚动位置找“当前章节”：视口顶部下方最近的标题
+function findActiveHeadingId() {
+  if (outlineState.headings.length === 0) return null;
+  const tops = measureHeadingTops();
+  const target = editor.scrollTop + editor.clientHeight * 0.15;
+  let active = outlineState.headings[0].id;
+  for (const h of outlineState.headings) {
+    if ((tops[h.id] || 0) <= target) active = h.id;
+    else break;
+  }
+  return active;
+}
+
+function updateActiveHeadingFromScroll() {
+  if (outlineState.headings.length === 0) return;
+  if (outlineState.ticking) return;
+  outlineState.ticking = true;
+  requestAnimationFrame(() => {
+    outlineState.ticking = false;
+    const id = findActiveHeadingId();
+    if (id) setActiveHeading(id, { expandAncestors: true });
+  });
 }
 
 // 启动
